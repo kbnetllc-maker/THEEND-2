@@ -1,16 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import {
-  fetchLead,
-  fetchMessages,
-  generateAiMessage,
-  queueScoreLead,
-  queueSendSms,
-} from '@/lib/api';
+import { fetchLead, fetchMessages, queueScoreLead, queueSendSms } from '@/lib/api';
 import { useLeadStore } from '@/stores/leadStore';
-import type { LeadListRow, MessageRow } from '@/types';
-
-const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
+import type { LeadListRow } from '@/types';
 
 function formatName(c: LeadListRow['contacts'][0] | undefined) {
   if (!c) return '—';
@@ -23,51 +15,6 @@ function scoreBadgeClass(score: number | null) {
   if (score > 70) return 'bg-emerald-900/80 text-emerald-200';
   if (score >= 40) return 'bg-amber-900/80 text-amber-200';
   return 'bg-red-900/80 text-red-200';
-}
-
-function suggestedAttemptForGenerate(msgs: MessageRow[] | undefined): number {
-  if (!msgs?.length) return 1;
-  let maxA = 0;
-  for (const m of msgs) {
-    if (m.direction !== 'OUTBOUND' || m.channel !== 'SMS') continue;
-    const a = m.attempt;
-    if (typeof a === 'number' && a > maxA) maxA = a;
-  }
-  return Math.min(Math.max(maxA + 1, 1), 5);
-}
-
-function lastContactAndFollowUp(msgs: MessageRow[] | undefined): {
-  lastContacted: Date | null;
-  followUpLabel: string;
-} {
-  if (!msgs?.length) return { lastContacted: null, followUpLabel: '—' };
-  const sms = msgs.filter((m) => m.channel === 'SMS');
-  const outbound = sms.filter((m) => m.direction === 'OUTBOUND');
-  if (outbound.length === 0) return { lastContacted: null, followUpLabel: '—' };
-  const lastOut = outbound.reduce((a, b) =>
-    new Date(a.createdAt) > new Date(b.createdAt) ? a : b
-  );
-  const lastContacted = new Date(lastOut.createdAt);
-  const lastOutMs = lastContacted.getTime();
-  const hadReplyAfter = sms.some(
-    (m) => m.direction === 'INBOUND' && new Date(m.createdAt).getTime() > lastOutMs
-  );
-  if (hadReplyAfter) return { lastContacted, followUpLabel: '— (replied after last outbound)' };
-  const hadAutomation = outbound.some((m) => m.automation === true);
-  if (!hadAutomation) {
-    return {
-      lastContacted,
-      followUpLabel: '— (no automated SMS yet; follow-up only after auto outreach)',
-    };
-  }
-  const eligibleAt = new Date(lastOutMs + THREE_DAYS_MS);
-  if (Date.now() >= eligibleAt.getTime()) {
-    return { lastContacted, followUpLabel: 'Eligible on next daily sweep (no reply ≥3 days)' };
-  }
-  return {
-    lastContacted,
-    followUpLabel: eligibleAt.toLocaleString(),
-  };
 }
 
 export function LeadDetail() {
@@ -96,26 +43,19 @@ export function LeadDetail() {
 
   const scoreMu = useMutation({
     mutationFn: (id: string) => queueScoreLead(id),
-    onSuccess: (_data, leadId) => {
+    onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['leads'] });
-      void qc.invalidateQueries({ queryKey: ['lead', leadId] });
+      void qc.invalidateQueries({ queryKey: ['lead', selectedLeadId] });
     },
   });
 
   const smsMu = useMutation({
     mutationFn: queueSendSms,
-    onSuccess: (_data, vars) => {
+    onSuccess: () => {
       setSmsDraft('');
-      void qc.invalidateQueries({ queryKey: ['messages', vars.leadId] });
+      void qc.invalidateQueries({ queryKey: ['messages', selectedLeadId] });
       void qc.invalidateQueries({ queryKey: ['leads'] });
-      void qc.invalidateQueries({ queryKey: ['lead', vars.leadId] });
-    },
-  });
-
-  const aiGenMu = useMutation({
-    mutationFn: (p: { leadId: string; attempt: number }) => generateAiMessage(p),
-    onSuccess: (draft) => {
-      setSmsDraft(draft.body.slice(0, 160));
+      void qc.invalidateQueries({ queryKey: ['lead', selectedLeadId] });
     },
   });
 
@@ -123,16 +63,6 @@ export function LeadDetail() {
   const primary = lead?.contacts[0];
   const canSend =
     Boolean(primary?.id && lead?.id) && Boolean(primary?.phone?.trim()) && smsDraft.trim().length > 0;
-
-  const nextAttempt = useMemo(
-    () => suggestedAttemptForGenerate(messagesQ.data),
-    [messagesQ.data]
-  );
-
-  const { lastContacted, followUpLabel } = useMemo(
-    () => lastContactAndFollowUp(messagesQ.data),
-    [messagesQ.data]
-  );
 
   return (
     <div
@@ -184,22 +114,6 @@ export function LeadDetail() {
                     {lead.aiScore ?? '—'}
                   </span>
                 </p>
-                {lead.aiScoreReason?.trim() ? (
-                  <p className="mt-2 text-xs leading-relaxed text-slate-400">
-                    <span className="font-medium text-slate-500">Why: </span>
-                    {lead.aiScoreReason}
-                  </p>
-                ) : null}
-                <div className="mt-3 space-y-1 border-t border-slate-800 pt-3 text-xs text-slate-400">
-                  <p>
-                    <span className="font-medium text-slate-500">Last contacted: </span>
-                    {lastContacted ? lastContacted.toLocaleString() : '—'}
-                  </p>
-                  <p>
-                    <span className="font-medium text-slate-500">Next follow-up: </span>
-                    {followUpLabel}
-                  </p>
-                </div>
               </section>
 
               <section className="mb-6">
@@ -253,10 +167,6 @@ export function LeadDetail() {
                           <p className="whitespace-pre-wrap">{m.body}</p>
                           <p className="mt-1 text-[10px] opacity-70">
                             {new Date(m.createdAt).toLocaleString()}
-                            {outbound && m.channel === 'SMS' && typeof m.attempt === 'number'
-                              ? ` · attempt ${m.attempt}`
-                              : ''}
-                            {outbound && m.automation ? ' · auto' : ''}
                           </p>
                         </div>
                       </div>
@@ -282,19 +192,6 @@ export function LeadDetail() {
                   placeholder="Message (max 160 chars)…"
                   className="w-full resize-none rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white placeholder:text-slate-600"
                 />
-                <div className="mt-2 flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    disabled={!lead?.id || aiGenMu.isPending}
-                    onClick={() => lead?.id && aiGenMu.mutate({ leadId: lead.id, attempt: nextAttempt })}
-                    className="rounded-md border border-indigo-500/50 bg-indigo-950/40 px-3 py-1.5 text-xs font-medium text-indigo-200 hover:bg-indigo-900/50 disabled:opacity-50"
-                  >
-                    {aiGenMu.isPending ? 'Generating…' : `Generate AI message (attempt ${nextAttempt})`}
-                  </button>
-                  {aiGenMu.isError && (
-                    <span className="text-xs text-red-400">{(aiGenMu.error as Error).message}</span>
-                  )}
-                </div>
                 <div className="mt-1 flex items-center justify-between text-xs text-slate-500">
                   <span>{smsDraft.length}/160</span>
                   {smsMu.isError && (
