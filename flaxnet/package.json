@@ -1,0 +1,17 @@
+{
+  "name": "flaxnet",
+  "private": true,
+  "description": "Flaxnet — AI CRM for real estate wholesalers",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:api": "npm run dev -w @flaxnet/api",
+    "dev:web": "npm run dev -w @flaxnet/web",
+    "typecheck": "npm run typecheck -w @flaxnet/api -w @flaxnet/web -w @flaxnet/shared --if-present"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

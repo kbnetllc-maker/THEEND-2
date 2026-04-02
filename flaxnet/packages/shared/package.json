@@ -1,0 +1,16 @@
+{
+  "name": "@flaxnet/shared",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "types": "./src/types.ts",
+  "exports": {
+    ".": "./src/types.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.2"
+  }
+}

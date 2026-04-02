@@ -1,0 +1,344 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── WORKSPACE ────────────────────────────────────────────────
+model Workspace {
+  id          String   @id @default(cuid())
+  name        String
+  clerkOrgId  String   @unique
+  plan        Plan     @default(STARTER)
+  createdAt   DateTime @default(now())
+
+  members     WorkspaceMember[]
+  leads       Lead[]
+  contacts    Contact[]
+  deals       Deal[]
+  tasks       Task[]
+  templates   MessageTemplate[]
+  stages      PipelineStage[]
+  automations AutomationRule[]
+  messages    Message[]
+  importJobs  ImportJob[]
+}
+
+model WorkspaceMember {
+  id          String    @id @default(cuid())
+  workspaceId String
+  clerkUserId String
+  role        Role      @default(MEMBER)
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, clerkUserId])
+}
+
+// ─── PROPERTIES / LEADS ───────────────────────────────────────
+model Lead {
+  id              String      @id @default(cuid())
+  workspaceId     String
+
+  address         String
+  city            String
+  state           String
+  zip             String
+  county          String?
+  apn             String?
+  propertyType    String?
+  bedrooms        Int?
+  bathrooms       Float?
+  sqft            Int?
+  lotSize         Float?
+  yearBuilt       Int?
+  estimatedValue  Float?
+
+  status          LeadStatus  @default(NEW)
+  stageId         String?
+  tags            String[]    @default([])
+  source          String?
+  sourceFileId    String?
+  assignedTo      String?
+
+  aiScore         Float?
+  aiScoreReason   String?
+  aiSummary       String?
+  enrichedAt      DateTime?
+  scoredAt        DateTime?
+
+  isDuplicate     Boolean     @default(false)
+  isArchived      Boolean     @default(false)
+
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  workspace       Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  stage           PipelineStage? @relation(fields: [stageId], references: [id])
+  contacts        Contact[]
+  activities      Activity[]
+  tasks           Task[]
+  deals           Deal[]
+  messages        Message[]
+
+  @@index([workspaceId, status])
+  @@index([workspaceId, stageId])
+  @@index([workspaceId, status, createdAt])
+  @@index([workspaceId, aiScore])
+  @@index([address, zip])
+}
+
+// ─── CONTACTS (OWNERS) ────────────────────────────────────────
+model Contact {
+  id              String    @id @default(cuid())
+  workspaceId     String
+  leadId          String?
+
+  firstName       String?
+  lastName        String?
+  email           String?
+  phone           String?
+  phone2          String?
+  mailingAddress  String?
+  ownerType       String?
+  isDeceased      Boolean   @default(false)
+  doNotContact    Boolean   @default(false)
+
+  age             Int?
+  yearsOwned      Int?
+  equityEstimate  Float?
+  liensAmount     Float?
+  taxDelinquent   Boolean   @default(false)
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  workspace       Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  lead            Lead?     @relation(fields: [leadId], references: [id])
+  messages        Message[]
+}
+
+// ─── PIPELINE ─────────────────────────────────────────────────
+model PipelineStage {
+  id          String    @id @default(cuid())
+  workspaceId String
+  name        String
+  color       String    @default("#6366f1")
+  order       Int
+  isDefault   Boolean   @default(false)
+  automations Json?
+
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  leads       Lead[]
+
+  @@unique([workspaceId, order])
+}
+
+// ─── DEALS ────────────────────────────────────────────────────
+model Deal {
+  id              String      @id @default(cuid())
+  workspaceId     String
+  leadId          String
+
+  arv             Float?
+  rehabCost       Float?
+  rehabLevel      RehabLevel?
+  mao             Float?
+  offerPrice      Float?
+  assignmentFee   Float?
+  wholesaleProfit Float?
+
+  status          DealStatus  @default(ANALYZING)
+  closingDate     DateTime?
+  buyerName       String?
+  notes           String?
+
+  aiRiskScore     Float?
+  aiRiskFlags     String[]    @default([])
+  aiDealSummary   String?
+
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  workspace       Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  lead            Lead        @relation(fields: [leadId], references: [id], onDelete: Cascade)
+}
+
+// ─── COMMUNICATIONS ───────────────────────────────────────────
+model Message {
+  id          String        @id @default(cuid())
+  workspaceId String
+  leadId      String?
+  contactId   String?
+
+  channel     Channel
+  direction   Direction
+  body        String
+  subject     String?
+  status      MessageStatus @default(SENT)
+  twilioSid   String?
+  sentBy      String?
+  templateId  String?
+
+  createdAt   DateTime      @default(now())
+
+  workspace   Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  lead        Lead?         @relation(fields: [leadId], references: [id])
+  contact     Contact?      @relation(fields: [contactId], references: [id])
+}
+
+model MessageTemplate {
+  id          String   @id @default(cuid())
+  workspaceId String
+  name        String
+  channel     Channel
+  subject     String?
+  body        String
+  variables   String[] @default([])
+
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+}
+
+// ─── ACTIVITIES ───────────────────────────────────────────────
+model Activity {
+  id          String       @id @default(cuid())
+  leadId      String
+  type        ActivityType
+  body        String?
+  metadata    Json?
+  createdBy   String?
+  createdAt   DateTime     @default(now())
+
+  lead        Lead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
+}
+
+// ─── TASKS ────────────────────────────────────────────────────
+model Task {
+  id           String     @id @default(cuid())
+  workspaceId  String
+  leadId       String?
+  title        String
+  dueAt        DateTime?
+  completedAt  DateTime?
+  priority     Priority   @default(MEDIUM)
+  assignedTo   String?
+  automationId String?
+
+  workspace    Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  lead         Lead?      @relation(fields: [leadId], references: [id])
+}
+
+// ─── AUTOMATION ───────────────────────────────────────────────
+model AutomationRule {
+  id          String   @id @default(cuid())
+  workspaceId String
+  name        String
+  isActive    Boolean  @default(true)
+  trigger     Json
+  conditions  Json
+  actions     Json
+
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+}
+
+// ─── INGESTION ────────────────────────────────────────────────
+model ImportJob {
+  id          String       @id @default(cuid())
+  workspaceId String
+  source      String
+  fileUrl     String?
+  sheetUrl    String?
+  status      ImportStatus @default(PENDING)
+  totalRows   Int          @default(0)
+  imported    Int          @default(0)
+  duplicates  Int          @default(0)
+  errors      Int          @default(0)
+  columnMap   Json?
+  createdAt   DateTime     @default(now())
+  completedAt DateTime?
+
+  workspace   Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+}
+
+// ─── ENUMS ────────────────────────────────────────────────────
+enum Plan {
+  STARTER
+  GROWTH
+  SCALE
+}
+
+enum Role {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  INTERESTED
+  NOT_INTERESTED
+  UNDER_CONTRACT
+  CLOSED
+  DEAD
+}
+
+enum DealStatus {
+  ANALYZING
+  OFFER_SENT
+  NEGOTIATING
+  UNDER_CONTRACT
+  CLOSED
+  DEAD
+}
+
+enum RehabLevel {
+  LIGHT
+  MEDIUM
+  HEAVY
+  FULL_GUT
+}
+
+enum Channel {
+  SMS
+  EMAIL
+}
+
+enum Direction {
+  INBOUND
+  OUTBOUND
+}
+
+enum MessageStatus {
+  PENDING
+  SENT
+  DELIVERED
+  FAILED
+  READ
+}
+
+enum ActivityType {
+  CALL
+  SMS
+  EMAIL
+  NOTE
+  STAGE_CHANGE
+  SCORE_UPDATE
+  ENRICHMENT
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum ImportStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
