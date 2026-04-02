@@ -7,8 +7,11 @@
     "packages/*"
   ],
   "scripts": {
+    "docker:up": "docker compose up -d",
+    "setup:db": "npm run db:push -w @flaxnet/api && npm run db:seed:dev -w @flaxnet/api",
     "dev:api": "npm run dev -w @flaxnet/api",
     "dev:web": "npm run dev -w @flaxnet/web",
+    "dev:worker": "npm run worker -w @flaxnet/api",
     "build": "npm run build -w @flaxnet/api -w @flaxnet/web",
     "start:api": "npm run start -w @flaxnet/api",
     "start:web": "npm run start -w @flaxnet/web",

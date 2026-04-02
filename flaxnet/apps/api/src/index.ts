@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import cors from 'cors';
 import express, { type ErrorRequestHandler, type RequestHandler } from 'express';
 import { asyncRoute } from './lib/asyncRoute.js';
 import { logEnvReadiness } from './lib/envCheck.js';
@@ -26,6 +27,16 @@ logEnvReadiness('api');
 
 const app = express();
 const port = Number(process.env.PORT ?? 4000);
+
+const isProd = process.env.NODE_ENV === 'production';
+const corsOrigins = process.env.FRONTEND_ORIGIN?.split(',').map((s) => s.trim()).filter(Boolean) ?? [];
+app.use(
+  cors(
+    isProd && corsOrigins.length > 0
+      ? { origin: corsOrigins, credentials: true }
+      : { origin: true, credentials: true }
+  )
+);
 
 app.post(
   '/api/billing/webhook',

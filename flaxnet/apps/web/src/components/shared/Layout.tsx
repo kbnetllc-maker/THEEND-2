@@ -12,11 +12,69 @@ import { useEffect, useState } from 'react';
 import { clearImpersonation, fetchAdminCapabilities, getImpersonationFromStorage, setAuthToken } from '@/lib/api';
 import { UpgradeModal } from '@/components/shared/UpgradeModal';
 
-const baseNav = [
-  { to: '/leads', label: 'Opportunities' },
-  { to: '/pipeline', label: 'Pipeline' },
-  { to: '/settings', label: 'Settings' },
-] as const;
+type NavItem = { to: string; label: string };
+type NavSection = { title: string; items: NavItem[] };
+
+const NAV_SECTIONS: NavSection[] = [
+  {
+    title: 'Overview',
+    items: [{ to: '/dashboard', label: 'Dashboard' }],
+  },
+  {
+    title: 'Pipeline',
+    items: [
+      { to: '/leads', label: 'Opportunities' },
+      { to: '/pipeline', label: 'Board' },
+      { to: '/conversations', label: 'Conversations' },
+    ],
+  },
+  {
+    title: 'Tools',
+    items: [
+      { to: '/tasks', label: 'Tasks' },
+      { to: '/automations', label: 'Automations' },
+      { to: '/tools/deal-analyzer', label: 'Deal analyzer' },
+    ],
+  },
+  {
+    title: 'Account',
+    items: [{ to: '/settings', label: 'Settings' }],
+  },
+];
+
+function navItemActive(pathname: string, to: string): boolean {
+  if (to === '/settings') return pathname.startsWith('/settings');
+  return pathname === to || pathname.startsWith(`${to}/`);
+}
+
+function NavSectionBlock({
+  title,
+  items,
+  pathname,
+}: {
+  title: string;
+  items: NavItem[];
+  pathname: string;
+}) {
+  return (
+    <div className="mb-5">
+      <p className="mb-1.5 px-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500">{title}</p>
+      <div className="flex flex-col gap-0.5">
+        {items.map((item) => (
+          <Link
+            key={item.to}
+            to={item.to}
+            className={`rounded-md px-2 py-2 text-sm transition-colors hover:bg-slate-800 ${
+              navItemActive(pathname, item.to) ? 'bg-slate-800 text-white' : 'text-slate-300'
+            }`}
+          >
+            {item.label}
+          </Link>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 function ClerkHeader() {
   const { getToken } = useAuth();
@@ -65,30 +123,23 @@ export function Layout() {
     };
   }, []);
 
-  const nav = adminQ.isSuccess
-    ? [...baseNav, { to: '/admin' as const, label: 'Admin' }]
-    : [...baseNav];
+  const sections: NavSection[] = [...NAV_SECTIONS];
+  if (adminQ.isSuccess) {
+    sections.push({ title: 'Admin', items: [{ to: '/admin', label: 'Admin panel' }] });
+  }
 
   return (
     <div className="flex min-h-screen bg-slate-950">
       <UpgradeModal />
       <aside className="w-56 shrink-0 border-r border-slate-800 bg-slate-900/80">
         <div className="p-3">
-          <span className="font-bold text-indigo-400">Flaxnet</span>
+          <Link to="/dashboard" className="font-bold text-indigo-400 hover:text-indigo-300">
+            Flaxnet
+          </Link>
         </div>
-        <nav className="flex flex-col gap-1 px-2 pb-4">
-          {nav.map((item) => (
-            <Link
-              key={item.to}
-              to={item.to}
-              className={`rounded-md px-2 py-2 text-sm hover:bg-slate-800 ${
-                loc.pathname === item.to || loc.pathname.startsWith(`${item.to}/`)
-                  ? 'bg-slate-800 text-white'
-                  : 'text-slate-300'
-              }`}
-            >
-              {item.label}
-            </Link>
+        <nav className="px-2 pb-4">
+          {sections.map((s) => (
+            <NavSectionBlock key={s.title} title={s.title} items={s.items} pathname={loc.pathname} />
           ))}
         </nav>
       </aside>
@@ -122,7 +173,7 @@ export function Layout() {
               <ClerkHeader />
             </>
           ) : (
-            <span className="text-xs text-amber-400/90">Dev mode — optional VITE_CLERK_PUBLISHABLE_KEY</span>
+            <span className="text-xs text-amber-400/90">Dev mode — API via Vite proxy (/api → :4000)</span>
           )}
         </header>
         <main className="flex-1 p-6">

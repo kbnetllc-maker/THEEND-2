@@ -2,7 +2,14 @@ import axios, { isAxiosError } from 'axios';
 import type { ApiResponse } from '@flaxnet/shared';
 import type { LeadListRow, MessageRow, PipelineStage } from '@/types';
 
-const baseURL = import.meta.env.VITE_API_URL ?? '';
+/**
+ * In Vite dev, default to same-origin `/api` (proxy → API). Set `VITE_API_DIRECT=true` + `VITE_API_URL` to call the API directly.
+ * Production: set `VITE_API_URL` to your deployed API origin.
+ */
+const baseURL =
+  import.meta.env.DEV && import.meta.env.VITE_API_DIRECT !== 'true'
+    ? ''
+    : (import.meta.env.VITE_API_URL?.trim() ?? '');
 
 const IMP_WS = 'x-flaxnet-impersonate-workspace';
 const IMP_EXP = 'x-flaxnet-impersonate-expires';
@@ -325,6 +332,50 @@ export async function bootstrapWorkspace(name: string): Promise<{ created: boole
   );
   const data = unwrap(res);
   return { created: data.created };
+}
+
+export type ConversationIndexRow = {
+  leadId: string | null;
+  _max: { createdAt: string };
+};
+
+export async function fetchConversationsIndex(): Promise<ConversationIndexRow[]> {
+  const res = await api.get<ApiResponse<ConversationIndexRow[]>>('/api/comms/conversations');
+  return unwrap(res);
+}
+
+export type TaskRow = {
+  id: string;
+  workspaceId: string;
+  leadId: string | null;
+  title: string;
+  dueAt: string | null;
+  completedAt: string | null;
+  priority: string;
+  assignedTo: string | null;
+};
+
+export async function fetchTasks(params?: { completed?: boolean; leadId?: string }): Promise<TaskRow[]> {
+  const sp = new URLSearchParams();
+  if (params?.completed === true) sp.set('completed', 'true');
+  if (params?.leadId) sp.set('leadId', params.leadId);
+  const q = sp.toString();
+  const res = await api.get<ApiResponse<TaskRow[]>>(`/api/tasks${q ? `?${q}` : ''}`);
+  return unwrap(res);
+}
+
+export type AutomationRuleRow = {
+  id: string;
+  name: string;
+  isActive: boolean;
+  trigger: unknown;
+  conditions: unknown;
+  actions: unknown;
+};
+
+export async function fetchAutomationRules(): Promise<AutomationRuleRow[]> {
+  const res = await api.get<ApiResponse<AutomationRuleRow[]>>('/api/automations');
+  return unwrap(res);
 }
 
 export async function importCsvMapped(file: File, columnMap: Record<string, string>): Promise<{
