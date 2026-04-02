@@ -181,6 +181,11 @@ model Message {
   twilioSid   String?
   sentBy      String?
   templateId  String?
+  /** SMS outreach sequence (1–5); null for legacy rows */
+  attempt     Int?
+  /** True when sent by automation engine (counts toward max 3 auto SMS) */
+  automation  Boolean       @default(false)
+  metadata    Json?
 
   createdAt   DateTime      @default(now())
 

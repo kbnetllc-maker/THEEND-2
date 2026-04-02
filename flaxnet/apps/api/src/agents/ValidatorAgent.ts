@@ -1,14 +1,19 @@
 import { z } from 'zod';
-import type { Channel } from '@prisma/client';
 
 const scoringOutputSchema = z.object({
   score: z.number().min(0).max(100),
   tier: z.enum(['HOT', 'WARM', 'COLD']),
   reasons: z.array(z.string()).min(1).max(5),
-  urgencySignals: z.array(z.string()),
+  urgencySignals: z.array(z.string()).optional().default([]),
 });
 
-const dealAnalyzerOutputSchema = z.object({
+const outreachSmsSchema = z.object({
+  body: z.string(),
+  characterCount: z.number().optional(),
+  variables: z.record(z.string()).optional().default({}),
+});
+
+const dealAnalyzerSchema = z.object({
   mao: z.number(),
   wholesaleProfit: z.number(),
   riskScore: z.number().min(0).max(100),
@@ -17,27 +22,15 @@ const dealAnalyzerOutputSchema = z.object({
   recommendation: z.enum(['PROCEED', 'NEGOTIATE', 'PASS']),
 });
 
-const outreachSmsSchema = z.object({
-  body: z.string(),
-  characterCount: z.number(),
-  variables: z.record(z.string()),
-});
-
-const outreachEmailSchema = z.object({
-  subject: z.string(),
-  body: z.string(),
-  variables: z.record(z.string()),
-});
-
-const BANNED_SMS_ATTEMPT1 = /\bcash offer\b/i;
+const BANNED_ALWAYS = ['guaranteed', 'limited time'] as const;
+const CASH_OFFER = /\bcash offer\b/i;
 
 export type ScoringOutput = z.infer<typeof scoringOutputSchema>;
-export type DealAnalyzerOutput = z.infer<typeof dealAnalyzerOutputSchema>;
 export type SmsOutreach = z.infer<typeof outreachSmsSchema>;
-export type EmailOutreach = z.infer<typeof outreachEmailSchema>;
-export type OutreachOutput = SmsOutreach | EmailOutreach;
+export type DealAnalyzerOutput = z.infer<typeof dealAnalyzerSchema>;
 
 export class ValidatorAgent {
+  /** score 0–100, tier matches band, reasons 1–5 */
   validateScore(output: unknown): ScoringOutput {
     const parsed = scoringOutputSchema.safeParse(output);
     if (!parsed.success) throw parsed.error;
@@ -52,26 +45,25 @@ export class ValidatorAgent {
     return d;
   }
 
-  validateDeal(output: unknown): DealAnalyzerOutput {
-    return dealAnalyzerOutputSchema.parse(output);
+  /** SMS under 160 chars; attempt 1 cannot say "cash offer"; banned phrases always blocked */
+  validateOutreach(output: unknown, attempt: number): SmsOutreach {
+    const d = outreachSmsSchema.parse(output);
+    if (d.body.length > 160) {
+      throw new Error('SMS body exceeds 160 characters');
+    }
+    if (attempt === 1 && CASH_OFFER.test(d.body)) {
+      throw new Error('SMS attempt 1 must not mention "cash offer"');
+    }
+    const lower = d.body.toLowerCase();
+    for (const phrase of BANNED_ALWAYS) {
+      if (lower.includes(phrase)) {
+        throw new Error(`Banned phrase: ${phrase}`);
+      }
+    }
+    return d;
   }
 
-  validateOutreach(output: unknown, channel: Channel, attempt: number): OutreachOutput {
-    if (channel === 'SMS') {
-      const d = outreachSmsSchema.parse(output);
-      if (d.body.length > 160) throw new Error('SMS body exceeds 160 characters');
-      if (attempt === 1 && BANNED_SMS_ATTEMPT1.test(d.body)) {
-        throw new Error('SMS attempt 1 must not mention "cash offer"');
-      }
-      for (const banned of ['guaranteed', 'limited time']) {
-        if (d.body.toLowerCase().includes(banned)) {
-          throw new Error(`Banned phrase: ${banned}`);
-        }
-      }
-      return d;
-    }
-    const e = outreachEmailSchema.parse(output);
-    if (!e.subject?.trim()) throw new Error('Email subject required');
-    return e;
+  validateDeal(output: unknown): DealAnalyzerOutput {
+    return dealAnalyzerSchema.parse(output);
   }
 }

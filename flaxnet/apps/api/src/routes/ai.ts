@@ -14,16 +14,15 @@ router.post(
   validateBody(
     z.object({
       leadId: z.string(),
-      channel: z.enum(['SMS', 'EMAIL']),
+      attempt: z.number().int().min(1).max(5),
       tone: z.enum(['professional', 'friendly', 'urgent']).optional(),
-      templateId: z.string().optional(),
     })
   ),
   async (req, res) => {
     const workspaceId = req.workspaceId!;
-    const { leadId, channel, tone } = req.body as {
+    const { leadId, attempt, tone } = req.body as {
       leadId: string;
-      channel: 'SMS' | 'EMAIL';
+      attempt: number;
       tone?: 'professional' | 'friendly' | 'urgent';
     };
     const lead = await prisma.lead.findFirst({
@@ -38,9 +37,8 @@ router.post(
     const draft = await agent.run({
       lead,
       contact,
-      channel,
       tone: tone ?? 'professional',
-      attempt: 1,
+      attempt,
     });
     res.json(ok(draft));
   }
@@ -93,7 +91,7 @@ router.post('/analyze-deal', validateBody(z.object({ dealId: z.string() })), asy
   res.json(ok(out));
 });
 
-router.post('/clean-data', validateBody(z.object({ leadIds: z.array(z.string()) })), async (req, res) => {
+router.post('/clean-data', validateBody(z.object({ leadIds: z.array(z.string()) })), async (_req, res) => {
   res.status(501).json(fail('Batch clean-data — queue enrichment jobs per lead in next iteration'));
 });
 

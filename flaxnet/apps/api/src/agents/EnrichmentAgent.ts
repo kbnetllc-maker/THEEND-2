@@ -1,13 +1,13 @@
 import type { Lead } from '@prisma/client';
-import { claudeJson } from '../lib/claude.js';
 import { z } from 'zod';
+import { callClaude } from '../lib/claude.js';
 
 export type EnrichmentInput = {
   lead: Lead;
   rawData?: Record<string, string>;
 };
 
-const enrichmentOutputSchema = z.object({
+const enrichmentShapeSchema = z.object({
   normalized: z.object({
     address: z.string(),
     city: z.string(),
@@ -22,9 +22,9 @@ const enrichmentOutputSchema = z.object({
   flags: z.array(z.string()),
 });
 
-export type EnrichmentOutput = z.infer<typeof enrichmentOutputSchema>;
+export type EnrichmentOutput = z.infer<typeof enrichmentShapeSchema>;
 
-const ENRICHMENT_PROMPT = `You are a real estate data normalization expert.
+const ENRICHMENT_INSTRUCTIONS = `You are a real estate data normalization expert.
 
 Tasks:
 1. Standardize the address (USPS format)
@@ -52,12 +52,9 @@ Do not invent data. If a field cannot be determined, return null.`;
 
 export class EnrichmentAgent {
   async run(input: EnrichmentInput): Promise<EnrichmentOutput> {
-    const rawJson = {
-      lead: input.lead,
-      rawRow: input.rawData ?? {},
-    };
-    const user = `Raw lead data:\n${JSON.stringify(rawJson)}`;
-    const raw = await claudeJson(ENRICHMENT_PROMPT, user);
-    return enrichmentOutputSchema.parse(raw);
+    const payload = JSON.stringify({ lead: input.lead, rawRow: input.rawData ?? {} });
+    const prompt = `${ENRICHMENT_INSTRUCTIONS}\n\nRaw lead data:\n${payload}`;
+    const raw = await callClaude<unknown>(prompt);
+    return enrichmentShapeSchema.parse(raw);
   }
 }

@@ -1,4 +1,5 @@
 import { ScoringAgent } from '../agents/ScoringAgent.js';
+import { runAutomations } from '../lib/automationEngine.js';
 import { prisma } from '../lib/prisma.js';
 
 export type ScoringJobData = { leadId: string; workspaceId: string };
@@ -34,4 +35,6 @@ export async function processScoringJob(data: ScoringJobData): Promise<void> {
       metadata: { reasons: out.reasons, urgencySignals: out.urgencySignals },
     },
   });
+
+  await runAutomations('LEAD_SCORED', { leadId: lead.id, workspaceId: data.workspaceId });
 }

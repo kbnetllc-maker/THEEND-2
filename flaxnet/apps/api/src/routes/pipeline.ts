@@ -3,11 +3,13 @@ import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { fail, ok } from '../lib/response.js';
 import { validateBody } from '../middleware/validate.js';
+import { ensureDefaultPipelineStages } from '../lib/pipelineDefaults.js';
 
 const router = Router();
 
 router.get('/stages', async (req, res) => {
   const workspaceId = req.workspaceId!;
+  await ensureDefaultPipelineStages(workspaceId);
   const stages = await prisma.pipelineStage.findMany({
     where: { workspaceId },
     orderBy: { order: 'asc' },
@@ -30,6 +32,24 @@ router.post(
       data: { workspaceId, ...req.body },
     });
     res.status(201).json(ok(stage));
+  }
+);
+
+router.patch(
+  '/stages/reorder',
+  validateBody(z.object({ stages: z.array(z.object({ id: z.string(), order: z.number().int() })) })),
+  async (req, res) => {
+    const workspaceId = req.workspaceId!;
+    const { stages } = req.body as { stages: { id: string; order: number }[] };
+    await prisma.$transaction(
+      stages.map((s) =>
+        prisma.pipelineStage.updateMany({
+          where: { id: s.id, workspaceId },
+          data: { order: s.order },
+        })
+      )
+    );
+    res.json(ok({ reordered: stages.length }));
   }
 );
 
@@ -61,23 +81,5 @@ router.delete('/stages/:id', async (req, res) => {
   await prisma.pipelineStage.deleteMany({ where: { id: req.params.id, workspaceId } });
   res.json(ok({ deleted: true }));
 });
-
-router.patch(
-  '/stages/reorder',
-  validateBody(z.object({ stages: z.array(z.object({ id: z.string(), order: z.number().int() })) })),
-  async (req, res) => {
-    const workspaceId = req.workspaceId!;
-    const { stages } = req.body as { stages: { id: string; order: number }[] };
-    await prisma.$transaction(
-      stages.map((s) =>
-        prisma.pipelineStage.updateMany({
-          where: { id: s.id, workspaceId },
-          data: { order: s.order },
-        })
-      )
-    );
-    res.json(ok({ reordered: stages.length }));
-  }
-);
 
 export const pipelineRouter = router;

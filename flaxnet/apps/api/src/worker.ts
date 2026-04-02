@@ -5,8 +5,15 @@ import { processEnrichmentJob } from './jobs/enrichmentJob.js';
 import { processScoringJob } from './jobs/scoringJob.js';
 import { processOutreachJob } from './jobs/outreachJob.js';
 import { processImportJob } from './jobs/importJob.js';
+import { processFollowUpSweep } from './jobs/followUpJob.js';
 
 const connection = getRedisConnection();
+
+const followUpMs = Number(process.env.FOLLOW_UP_INTERVAL_MS) || 86_400_000;
+void processFollowUpSweep().catch((e) => console.error('[followUp] initial sweep', e));
+setInterval(() => {
+  void processFollowUpSweep().catch((e) => console.error('[followUp] sweep', e));
+}, followUpMs);
 
 new Worker(
   'enrichment',

@@ -40,19 +40,21 @@ router.post(
   ),
   async (req, res) => {
     const workspaceId = req.workspaceId!;
-    const body = req.body as {
+    const payload = req.body as {
       leadId: string;
       contactId: string;
+      body?: string;
       tone?: 'professional' | 'friendly' | 'urgent';
       attempt?: number;
     };
     await getQueues().outreach.add('send-outreach', {
       workspaceId,
-      leadId: body.leadId,
-      contactId: body.contactId,
-      channel: 'SMS',
-      tone: body.tone ?? 'professional',
-      attempt: body.attempt ?? 1,
+      leadId: payload.leadId,
+      contactId: payload.contactId,
+      body: payload.body?.trim() || undefined,
+      tone: payload.tone ?? 'professional',
+      attempt: payload.attempt ?? 1,
+      source: 'manual' as const,
       clerkUserId: req.clerkUserId,
     });
     res.json(ok({ queued: true }));
@@ -69,7 +71,7 @@ router.post(
       body: z.string().optional(),
     })
   ),
-  async (req, res) => {
+  async (_req, res) => {
     res.status(501).json(fail('Email channel is V2 (Resend) per roadmap'));
   }
 );

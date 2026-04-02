@@ -1,5 +1,5 @@
 import type { Contact, Lead } from '@prisma/client';
-import { claudeJson } from '../lib/claude.js';
+import { callClaude } from '../lib/claude.js';
 import { ValidatorAgent, type ScoringOutput } from './ValidatorAgent.js';
 
 export type ScoringInput = {
@@ -7,7 +7,7 @@ export type ScoringInput = {
   contact: Contact;
 };
 
-const SCORING_PROMPT = `You are an expert real estate wholesaler. Score this seller's motivation to sell (0-100).
+const SCORING_INSTRUCTIONS = `You are an expert real estate wholesaler. Score this seller's motivation to sell (0-100).
 
 Scoring factors (weight accordingly):
 - Tax delinquent: +25 points
@@ -34,20 +34,8 @@ export class ScoringAgent {
 
   async run(input: ScoringInput): Promise<ScoringOutput> {
     const payload = JSON.stringify({ lead: input.lead, contact: input.contact });
-    const user = `Property & Owner Data:\n${payload}`;
-    let raw: unknown;
-    try {
-      raw = await claudeJson(SCORING_PROMPT, user);
-    } catch (e) {
-      if (e instanceof SyntaxError) {
-        raw = await claudeJson(
-          SCORING_PROMPT,
-          `${user}\n\nYour previous output was invalid JSON. Return ONLY the JSON object.`
-        );
-      } else {
-        throw e;
-      }
-    }
+    const prompt = `${SCORING_INSTRUCTIONS}\n\nProperty & Owner Data:\n${payload}`;
+    const raw = await callClaude<unknown>(prompt);
     return this.validator.validateScore(raw);
   }
 }

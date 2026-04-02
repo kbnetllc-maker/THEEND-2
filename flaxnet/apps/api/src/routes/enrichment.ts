@@ -13,13 +13,15 @@ router.post(
   async (req, res) => {
     const workspaceId = req.workspaceId!;
     const { leadIds } = req.body as { leadIds: string[] };
+    let queued = 0;
     for (const leadId of leadIds) {
       const lead = await prisma.lead.findFirst({ where: { id: leadId, workspaceId } });
       if (lead) {
         await getQueues().enrichment.add('enrich-lead', { leadId, workspaceId });
+        queued += 1;
       }
     }
-    res.json(ok({ queued: leadIds.length }));
+    res.json(ok({ queued, requested: leadIds.length }));
   }
 );
 
