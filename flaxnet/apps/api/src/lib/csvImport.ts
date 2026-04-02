@@ -1,11 +1,17 @@
 import { prisma } from './prisma.js';
+import { cleanAddressLine, cleanState, cleanZip } from './addressNormalize.js';
 import { ensureDefaultPipelineStages } from './pipelineDefaults.js';
-import { normalizePhoneDigits } from './phoneNormalize.js';
+import { normalizePhoneDigits, toE164US } from './phoneNormalize.js';
+import { queueEnrichmentJobsForLeads } from './queueEnrichmentBatch.js';
+import { PlanLimitExceededError } from './planErrors.js';
+import { assertLeadsWithinPlan } from './usageLimits.js';
 
 export type CsvImportParams = {
   workspaceId: string;
   rows: Record<string, string>[];
   columnMap: Record<string, string>;
+  /** Server-only: super-admin bypass for plan lead caps */
+  skipUsageLimits?: boolean;
 };
 
 const CHUNK = 250;
@@ -16,8 +22,16 @@ function getCol(row: Record<string, string>, columnMap: Record<string, string>, 
   return (row[header] ?? '').trim();
 }
 
+function normalizeStreet(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
 function addrKey(address: string, zip: string): string {
-  return `${address.toLowerCase().trim()}|${zip.replace(/\s/g, '').toLowerCase()}`;
+  return `${normalizeStreet(address)}|${zip.replace(/\s/g, '').toLowerCase()}`;
 }
 
 export type CsvImportResult = {
@@ -35,7 +49,14 @@ type PendingRow = {
 };
 
 export async function importCsvIntoWorkspace(p: CsvImportParams): Promise<CsvImportResult> {
-  const { workspaceId, rows, columnMap } = p;
+  const { workspaceId, rows, columnMap, skipUsageLimits } = p;
+
+  if (!skipUsageLimits) {
+    const cap = await assertLeadsWithinPlan(workspaceId, rows.length);
+    if (!cap.ok) {
+      throw new PlanLimitExceededError();
+    }
+  }
 
   await ensureDefaultPipelineStages(workspaceId);
 
@@ -65,9 +86,21 @@ export async function importCsvIntoWorkspace(p: CsvImportParams): Promise<CsvImp
     select: { id: true },
   });
 
+  const phoneHeaderMapped = Boolean(columnMap.phone);
+
   for (const row of rows) {
-    const address = getCol(row, columnMap, 'address');
-    const zip = getCol(row, columnMap, 'zip');
+    const addressRaw = getCol(row, columnMap, 'address');
+    const zipRaw = getCol(row, columnMap, 'zip');
+    if (!addressRaw || !zipRaw) {
+      skippedInvalid += 1;
+      continue;
+    }
+
+    const address = cleanAddressLine(addressRaw);
+    const zip = cleanZip(zipRaw);
+    const city = cleanAddressLine(getCol(row, columnMap, 'city')) || 'Unknown';
+    const state = cleanState(getCol(row, columnMap, 'state') || 'XX');
+
     if (!address || !zip) {
       skippedInvalid += 1;
       continue;
@@ -80,6 +113,10 @@ export async function importCsvIntoWorkspace(p: CsvImportParams): Promise<CsvImp
     }
 
     const phoneRaw = getCol(row, columnMap, 'phone');
+    if (phoneHeaderMapped && phoneRaw && !toE164US(phoneRaw)) {
+      skippedInvalid += 1;
+      continue;
+    }
     const phoneNorm = phoneRaw ? normalizePhoneDigits(phoneRaw) : null;
     if (phoneNorm && seenPhone.has(phoneNorm)) {
       duplicates += 1;
@@ -89,65 +126,82 @@ export async function importCsvIntoWorkspace(p: CsvImportParams): Promise<CsvImp
     seenAddr.add(ak);
     if (phoneNorm) seenPhone.add(phoneNorm);
 
-    const city = getCol(row, columnMap, 'city') || 'Unknown';
-    const state = getCol(row, columnMap, 'state') || 'XX';
     const firstNameRaw = getCol(row, columnMap, 'firstName');
-    let firstName: string | null = firstNameRaw || null;
+    let firstName: string | null = firstNameRaw ? cleanAddressLine(firstNameRaw) : null;
     let lastName: string | null = null;
     if (firstNameRaw && firstNameRaw.includes(' ')) {
       const parts = firstNameRaw.split(/\s+/);
-      firstName = parts[0] ?? null;
-      lastName = parts.slice(1).join(' ') || null;
+      firstName = parts[0] ? cleanAddressLine(parts[0]!) : null;
+      lastName = parts.slice(1).join(' ') ? cleanAddressLine(parts.slice(1).join(' ')) : null;
     }
 
-    const phoneDisplay = phoneRaw || null;
+    const phoneE164 = phoneRaw ? toE164US(phoneRaw) : null;
     pending.push({
       address,
       city,
       state,
       zip,
       contact:
-        phoneDisplay || firstName || lastName
-          ? { firstName, lastName, phone: phoneDisplay }
+        phoneE164 || firstName || lastName
+          ? { firstName, lastName, phone: phoneE164 }
           : undefined,
     });
   }
 
-  let imported = 0;
+  const importedLeadIds: string[] = [];
+
   for (let i = 0; i < pending.length; i += CHUNK) {
     const slice = pending.slice(i, i + CHUNK);
-    await prisma.$transaction(
-      slice.map((item) =>
-        prisma.lead.create({
-          data: {
-            workspaceId,
-            address: item.address,
-            city: item.city,
-            state: item.state,
-            zip: item.zip,
-            status: 'NEW',
-            source: 'csv_upload',
-            stageId: defaultStage?.id ?? undefined,
-            ...(item.contact
-              ? {
-                  contacts: {
-                    create: [
-                      {
-                        workspaceId,
-                        firstName: item.contact.firstName,
-                        lastName: item.contact.lastName,
-                        phone: item.contact.phone,
-                      },
-                    ],
-                  },
-                }
-              : {}),
-          },
-        })
-      )
-    );
-    imported += slice.length;
+    const leadData = slice.map((item) => ({
+      workspaceId,
+      address: item.address,
+      city: item.city,
+      state: item.state,
+      zip: item.zip,
+      status: 'NEW' as const,
+      source: 'csv_upload',
+      stageId: defaultStage?.id ?? null,
+    }));
+
+    const created = await prisma.lead.createManyAndReturn({
+      data: leadData,
+    });
+
+    const contactRows: {
+      workspaceId: string;
+      leadId: string;
+      firstName: string | null;
+      lastName: string | null;
+      phone: string | null;
+    }[] = [];
+
+    for (let j = 0; j < created.length; j++) {
+      const lead = created[j]!;
+      const item = slice[j]!;
+      importedLeadIds.push(lead.id);
+      if (item.contact?.firstName || item.contact?.lastName || item.contact?.phone) {
+        contactRows.push({
+          workspaceId,
+          leadId: lead.id,
+          firstName: item.contact.firstName ?? null,
+          lastName: item.contact.lastName ?? null,
+          phone: item.contact.phone ?? null,
+        });
+      }
+    }
+
+    if (contactRows.length > 0) {
+      await prisma.contact.createMany({ data: contactRows });
+    }
   }
 
-  return { imported, duplicates, skippedInvalid };
+  if (importedLeadIds.length > 0) {
+    try {
+      await queueEnrichmentJobsForLeads(importedLeadIds, workspaceId);
+    } catch {
+      // queueEnrichmentJobsForLeads logs; import still succeeded
+    }
+  }
+
+  return { imported: importedLeadIds.length, duplicates, skippedInvalid };
 }

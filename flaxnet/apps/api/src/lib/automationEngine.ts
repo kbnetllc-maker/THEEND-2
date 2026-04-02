@@ -1,5 +1,6 @@
 import { prisma } from './prisma.js';
 import { getQueues } from './queues.js';
+import { toE164US } from './phoneNormalize.js';
 
 export type AutomationEvent = 'LEAD_SCORED' | 'MESSAGE_RECEIVED' | 'NO_REPLY';
 
@@ -77,7 +78,7 @@ export async function runAutomations(event: AutomationEvent, ctx: AutomationCont
   if (event === 'LEAD_SCORED') {
     const score = lead.aiScore;
     if (score === null || score <= 70) return;
-    const phone = primary?.phone?.trim();
+    const phone = primary?.phone ? toE164US(primary.phone) : null;
     if (!primary?.id || !phone) return;
     if ((await countAutomationSms(lead.id)) > 0) return;
     await queueAutomationSms({
@@ -92,7 +93,7 @@ export async function runAutomations(event: AutomationEvent, ctx: AutomationCont
   if (event === 'NO_REPLY') {
     const autoCount = await countAutomationSms(lead.id);
     if (autoCount < 1 || autoCount >= MAX_AUTO_SMS) return;
-    if (!primary?.id || !primary.phone?.trim()) return;
+    if (!primary?.id || !toE164US(primary.phone ?? '')) return;
     const nextAttempt = autoCount + 1;
     if (nextAttempt > MAX_AUTO_SMS) return;
     await queueAutomationSms({

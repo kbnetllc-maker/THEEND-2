@@ -13,3 +13,11 @@ export function normalizePhoneDigits(raw: string): string | null {
   if (national10.length !== 10) return null;
   return `1${national10}`;
 }
+
+/** E.164 US (+1…) for Twilio storage and sends; null if not a valid US NANP number. */
+export function toE164US(raw: string | null | undefined): string | null {
+  if (!raw?.trim()) return null;
+  const digits = normalizePhoneDigits(raw);
+  if (!digits || digits.length !== 11) return null;
+  return `+${digits}`;
+}

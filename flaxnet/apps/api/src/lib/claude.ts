@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { logger } from './logger.js';
 
 const MODEL = process.env.ANTHROPIC_MODEL?.trim() || 'claude-sonnet-4-20250514';
 const TIMEOUT_MS = Number(process.env.ANTHROPIC_TIMEOUT_MS) || 120_000;
@@ -58,11 +59,14 @@ export async function callClaude<T>(prompt: string): Promise<T> {
   try {
     outputText = await runWithTimeout(prompt);
   } catch (e) {
-    console.error('[claude] request failed', { inputChars, err: e instanceof Error ? e.message : e });
+    logger.error('ai.claude_request_failed', {
+      inputChars,
+      err: e instanceof Error ? e.message : String(e),
+    });
     throw e;
   }
 
-  console.log('[claude] response', { inputChars, outputChars: outputText.length });
+  logger.info('ai.claude_response', { inputChars, outputChars: outputText.length });
 
   try {
     return parseJsonOrThrow(outputText) as T;
@@ -73,10 +77,10 @@ export async function callClaude<T>(prompt: string): Promise<T> {
     try {
       second = await runWithTimeout(repairPrompt);
     } catch (e) {
-      console.error('[claude] retry failed', { err: e instanceof Error ? e.message : e });
+      logger.error('ai.claude_repair_failed', { err: e instanceof Error ? e.message : String(e) });
       throw e;
     }
-    console.log('[claude] repair response', { outputChars: second.length });
+    logger.info('ai.claude_repair_response', { outputChars: second.length });
     return parseJsonOrThrow(second) as T;
   }
 }

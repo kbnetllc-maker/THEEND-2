@@ -1,12 +1,22 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import type { LeadStatus, Prisma } from '@prisma/client';
-import prisma from '../lib/prisma.js';
+import { prisma } from '../lib/prisma.js';
+import { cleanAddressLine, cleanState, cleanZip } from '../lib/addressNormalize.js';
 import { asyncRoute } from '../lib/asyncRoute.js';
+import { leadListSelect } from '../lib/leadListSelect.js';
+import { logger } from '../lib/logger.js';
 import { fail, ok } from '../lib/response.js';
 import { getQueues } from '../lib/queues.js';
 import { leadStatusFromStageName } from '../lib/stageStatus.js';
 import { validateBody } from '../middleware/validate.js';
+import { requireLeadCapacity } from '../middleware/usage.js';
+import {
+  batchConversionSignals,
+  conversationStatusLabel,
+  getLeadConversionSignals,
+  getPriorityLeads,
+} from '../lib/conversionSignals.js';
 
 const router = Router();
 
@@ -95,10 +105,7 @@ router.get(
       where,
       take: limit + 1,
       orderBy,
-      include: {
-        contacts: { orderBy: { createdAt: 'asc' }, take: 1 },
-        stage: { select: { id: true, name: true } },
-      },
+      select: leadListSelect,
       ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
     });
 
@@ -106,13 +113,47 @@ router.get(
     const data = hasMore ? rows.slice(0, limit) : rows;
     const nextCursor: string | null = hasMore ? rows[limit]!.id : null;
 
-    res.json(ok(data, { nextCursor }));
+    const sigMap = await batchConversionSignals(data.map((l) => l.id));
+    const enriched = data.map((l) => {
+      const sig = sigMap.get(l.id)!;
+      return {
+        ...l,
+        hasReplied: sig.responded,
+        conversationStatus: conversationStatusLabel(l, sig),
+        lastContactAt: sig.lastMessageAt?.toISOString() ?? null,
+      };
+    });
+
+    res.json(ok(enriched, { nextCursor }));
+  })
+);
+
+/** GET /priority — replied first, then score, then recent SMS activity */
+router.get(
+  '/priority',
+  asyncRoute(async (req, res) => {
+    const workspaceId = req.workspaceId!;
+    const limitRaw = Number(req.query.limit);
+    const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(Math.floor(limitRaw), 200) : 50;
+    const leads = await getPriorityLeads(workspaceId, limit);
+    const sigMap = await batchConversionSignals(leads.map((l) => l.id));
+    const enriched = leads.map((l) => {
+      const sig = sigMap.get(l.id)!;
+      return {
+        ...l,
+        hasReplied: sig.responded,
+        conversationStatus: conversationStatusLabel(l, sig),
+        lastContactAt: sig.lastMessageAt?.toISOString() ?? null,
+      };
+    });
+    res.json(ok(enriched));
   })
 );
 
 /** POST / — create lead (status NEW) */
 router.post(
   '/',
+  requireLeadCapacity(1),
   asyncRoute(async (req, res) => {
     const workspaceId = req.workspaceId!;
 
@@ -125,10 +166,10 @@ router.post(
     const lead = await prisma.lead.create({
       data: {
         workspaceId,
-        address: parsed.data.address,
-        city: parsed.data.city,
-        state: parsed.data.state,
-        zip: parsed.data.zip,
+        address: cleanAddressLine(parsed.data.address),
+        city: cleanAddressLine(parsed.data.city),
+        state: cleanState(parsed.data.state),
+        zip: cleanZip(parsed.data.zip),
         status: 'NEW',
       },
     });
@@ -191,7 +232,7 @@ router.post(
         await q.add('score-lead', { leadId: id, workspaceId });
       }
     } catch (e) {
-      console.error('[leads bulk score]', e);
+      logger.error('leads.bulk_score_queue', { err: e instanceof Error ? e.message : String(e) });
       res.status(503).json(fail('Queue unavailable (check REDIS_URL)'));
       return;
     }
@@ -220,7 +261,7 @@ router.post(
     try {
       await getQueues().enrichment.add('enrich-lead', { leadId: id, workspaceId });
     } catch (e) {
-      console.error('[leads enrich]', e);
+      logger.error('leads.enrich_queue', { err: e instanceof Error ? e.message : String(e) });
       res.status(503).json(fail('Queue unavailable (check REDIS_URL)'));
       return;
     }
@@ -249,7 +290,7 @@ router.post(
     try {
       await getQueues().scoring.add('score-lead', { leadId: id, workspaceId });
     } catch (e) {
-      console.error('[leads score]', e);
+      logger.error('leads.score_queue', { err: e instanceof Error ? e.message : String(e) });
       res.status(503).json(fail('Queue unavailable (check REDIS_URL)'));
       return;
     }
@@ -318,7 +359,15 @@ router.get(
       res.status(404).json(fail('Lead not found'));
       return;
     }
-    res.json(ok(lead));
+    const sig = await getLeadConversionSignals(lead.id);
+    res.json(
+      ok({
+        ...lead,
+        hasReplied: sig.responded,
+        conversationStatus: conversationStatusLabel(lead, sig),
+        lastContactAt: sig.lastMessageAt?.toISOString() ?? null,
+      })
+    );
   })
 );
 

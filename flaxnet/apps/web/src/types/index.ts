@@ -25,6 +25,11 @@ export type LeadListRow = {
   stageId?: string | null;
   stage?: StageBrief | null;
   contacts: ContactRow[];
+  /** From SMS thread (API enrichment) */
+  hasReplied?: boolean;
+  conversationStatus?: string;
+  /** Last SMS in or out (ISO) */
+  lastContactAt?: string | null;
 };
 
 export type MessageRow = {
@@ -39,6 +44,8 @@ export type MessageRow = {
   attempt?: number | null;
   automation?: boolean | null;
   metadata?: Record<string, unknown> | null;
+  replied?: boolean | null;
+  responseTimeMinutes?: number | null;
 };
 
 export type PipelineStage = {

@@ -3,7 +3,9 @@ import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { fail, ok } from '../lib/response.js';
 import { getQueues } from '../lib/queues.js';
+import { toE164US } from '../lib/phoneNormalize.js';
 import { validateBody } from '../middleware/validate.js';
+import { requireSmsCapacity } from '../middleware/usage.js';
 
 const router = Router();
 
@@ -28,6 +30,7 @@ router.get('/conversations/:leadId', async (req, res) => {
 
 router.post(
   '/sms',
+  requireSmsCapacity,
   validateBody(
     z.object({
       leadId: z.string(),
@@ -47,6 +50,21 @@ router.post(
       tone?: 'professional' | 'friendly' | 'urgent';
       attempt?: number;
     };
+    const contact = await prisma.contact.findFirst({
+      where: { id: payload.contactId, workspaceId, leadId: payload.leadId },
+    });
+    if (!contact) {
+      res.status(404).json(fail('Contact not found'));
+      return;
+    }
+    if (contact.doNotContact) {
+      res.status(403).json(fail('Contact is do-not-contact'));
+      return;
+    }
+    if (!toE164US(contact.phone ?? '')) {
+      res.status(400).json(fail('Valid US phone (E.164) required to send SMS'));
+      return;
+    }
     await getQueues().outreach.add('send-outreach', {
       workspaceId,
       leadId: payload.leadId,
@@ -56,6 +74,7 @@ router.post(
       attempt: payload.attempt ?? 1,
       source: 'manual' as const,
       clerkUserId: req.clerkUserId,
+      skipUsageLimits: Boolean(req.isSuperAdmin),
     });
     res.json(ok({ queued: true }));
   }

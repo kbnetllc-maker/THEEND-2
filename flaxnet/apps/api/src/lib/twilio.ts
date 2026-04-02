@@ -1,4 +1,5 @@
 import twilio from 'twilio';
+import { logger } from './logger.js';
 
 export function getTwilioConfig(): { sid: string; token: string; from: string } | null {
   const sid = process.env.TWILIO_ACCOUNT_SID;
@@ -16,5 +17,6 @@ export async function sendSMS(to: string, body: string): Promise<string> {
   }
   const client = twilio(cfg.sid, cfg.token);
   const msg = await client.messages.create({ to, from: cfg.from, body });
+  logger.info('twilio.message_created', { sid: msg.sid, toLen: to.length, bodyLen: body.length });
   return msg.sid;
 }

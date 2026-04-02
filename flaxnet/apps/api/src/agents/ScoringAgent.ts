@@ -7,34 +7,60 @@ export type ScoringInput = {
   contact: Contact;
 };
 
-const SCORING_INSTRUCTIONS = `You are an expert real estate wholesaler. Score this seller's motivation to sell (0-100).
+const SCORING_INSTRUCTIONS = `You are an expert at evaluating seller motivation for a real estate wholesaler.
 
-Scoring factors (weight accordingly):
-- Tax delinquent: +25 points
-- Equity > 50%: +20 points
-- Years owned > 15: +15 points
-- Out-of-state owner: +15 points
-- Absentee owner: +10 points
-- Property needs repair (based on age/value): +10 points
-- Owner age > 65: +5 points
-- LLC/Trust owner: -10 points (harder to negotiate)
+Score how motivated the seller likely is to transact in the next 90 days (0 = not motivated, 100 = very motivated).
+
+Use ONLY evidence implied by the JSON data. Each reason must cite a concrete signal (e.g. "Owned 22 years — often correlates with life-stage moves", "Out-of-state owner on a long-held rental"). Avoid generic phrases like "good opportunity" or "decent equity" without tying to fields.
+
+Scoring factors (weight and explain in reasons when applicable):
+- Tax / lien stress signals in data
+- Strong estimated equity or low LTV hints
+- Long hold period (15+ years)
+- Absentee / out-of-state owner
+- Older build or deferred maintenance signals from yearBuilt vs market
+- Owner age if present
+- LLC/trust ownership (can slow deals — note in reasons)
 
 Return ONLY valid JSON:
 {
   "score": 0-100,
   "tier": "HOT" | "WARM" | "COLD",
-  "reasons": ["top factor 1", "top factor 2", "top factor 3"],
-  "urgencySignals": ["array of urgent flags"]
+  "reasons": ["specific reason 1", "specific reason 2", "specific reason 3"],
+  "urgencySignals": ["short tags tied to data, e.g. long_hold, absentee"]
 }
 
-HOT = 70-100, WARM = 40-69, COLD = 0-39`;
+Tier bands: HOT = 70-100, WARM = 40-69, COLD = 0-39. Score and tier must match.`;
 
 export class ScoringAgent {
   private validator = new ValidatorAgent();
 
   async run(input: ScoringInput): Promise<ScoringOutput> {
-    const payload = JSON.stringify({ lead: input.lead, contact: input.contact });
-    const prompt = `${SCORING_INSTRUCTIONS}\n\nProperty & Owner Data:\n${payload}`;
+    const payload = JSON.stringify({
+      lead: {
+        address: input.lead.address,
+        city: input.lead.city,
+        state: input.lead.state,
+        zip: input.lead.zip,
+        propertyType: input.lead.propertyType,
+        bedrooms: input.lead.bedrooms,
+        bathrooms: input.lead.bathrooms,
+        yearBuilt: input.lead.yearBuilt,
+        estimatedValue: input.lead.estimatedValue,
+        sqft: input.lead.sqft,
+        status: input.lead.status,
+      },
+      contact: {
+        firstName: input.contact.firstName,
+        lastName: input.contact.lastName,
+        yearsOwned: input.contact.yearsOwned,
+        equityEstimate: input.contact.equityEstimate,
+        ownerType: input.contact.ownerType,
+        mailingAddress: input.contact.mailingAddress,
+        age: input.contact.age,
+      },
+    });
+    const prompt = `${SCORING_INSTRUCTIONS}\n\nProperty & owner (trimmed for scoring):\n${payload}`;
     const raw = await callClaude<unknown>(prompt);
     return this.validator.validateScore(raw);
   }

@@ -1,6 +1,10 @@
 import 'dotenv/config';
-import { Worker } from 'bullmq';
+import { Worker, type Job } from 'bullmq';
+import { logEnvReadiness } from './lib/envCheck.js';
 import { getRedisConnection } from './lib/redis.js';
+import { logger } from './lib/logger.js';
+
+logEnvReadiness('worker');
 import { processEnrichmentJob } from './jobs/enrichmentJob.js';
 import { processScoringJob } from './jobs/scoringJob.js';
 import { processOutreachJob } from './jobs/outreachJob.js';
@@ -15,36 +19,68 @@ setInterval(() => {
   void processFollowUpSweep().catch((e) => console.error('[followUp] sweep', e));
 }, followUpMs);
 
-new Worker(
+function attachFailureLogging(name: string, w: Worker) {
+  w.on('failed', (job, err) => {
+    logger.error('job.failed', {
+      queue: name,
+      jobId: job?.id,
+      jobName: job?.name,
+      attemptsMade: job?.attemptsMade,
+      err: err instanceof Error ? err.message : String(err),
+    });
+  });
+}
+
+function wrapProcessor(queue: string, fn: (job: Job) => Promise<void>) {
+  return async (job: Job) => {
+    try {
+      await fn(job);
+    } catch (e) {
+      logger.error('job.processor_throw', {
+        queue,
+        jobId: job.id,
+        jobName: job.name,
+        err: e instanceof Error ? e.message : String(e),
+      });
+      throw e;
+    }
+  };
+}
+
+const enrichmentWorker = new Worker(
   'enrichment',
-  async (job) => {
+  wrapProcessor('enrichment', async (job) => {
     if (job.name === 'enrich-lead') await processEnrichmentJob(job.data);
-  },
+  }),
   { connection }
 );
+attachFailureLogging('enrichment', enrichmentWorker);
 
-new Worker(
+const scoringWorker = new Worker(
   'scoring',
-  async (job) => {
+  wrapProcessor('scoring', async (job) => {
     if (job.name === 'score-lead') await processScoringJob(job.data);
-  },
+  }),
   { connection }
 );
+attachFailureLogging('scoring', scoringWorker);
 
-new Worker(
+const outreachWorker = new Worker(
   'outreach',
-  async (job) => {
+  wrapProcessor('outreach', async (job) => {
     if (job.name === 'send-outreach') await processOutreachJob(job.data);
-  },
+  }),
   { connection }
 );
+attachFailureLogging('outreach', outreachWorker);
 
-new Worker(
+const importWorker = new Worker(
   'import',
-  async (job) => {
+  wrapProcessor('import', async (job) => {
     if (job.name === 'import-csv') await processImportJob(job.data);
-  },
+  }),
   { connection }
 );
+attachFailureLogging('import', importWorker);
 
-console.log('[flaxnet-worker] BullMQ workers listening');
+logger.info('worker.started', { msg: 'BullMQ workers listening' });

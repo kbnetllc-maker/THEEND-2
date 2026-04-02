@@ -42,6 +42,7 @@ router.post(
     });
 
     if (hit?.leadId) {
+      const inboundAt = new Date();
       await prisma.message.create({
         data: {
           workspaceId,
@@ -57,6 +58,26 @@ router.post(
           metadata: { twilioInbound: true },
         },
       });
+
+      const lastOut = await prisma.message.findFirst({
+        where: {
+          leadId: hit.leadId,
+          workspaceId,
+          channel: 'SMS',
+          direction: 'OUTBOUND',
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (lastOut && !lastOut.replied) {
+        const minutes = Math.round((inboundAt.getTime() - lastOut.createdAt.getTime()) / 60_000);
+        await prisma.message.update({
+          where: { id: lastOut.id },
+          data: {
+            replied: true,
+            responseTimeMinutes: Math.max(0, minutes),
+          },
+        });
+      }
       await prisma.activity.create({
         data: {
           leadId: hit.leadId,

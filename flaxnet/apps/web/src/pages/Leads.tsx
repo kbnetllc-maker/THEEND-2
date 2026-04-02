@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { bulkLeads, fetchLeads, fetchPipelineStages, queueScoreLead } from '@/lib/api';
+import {
+  bulkLeads,
+  fetchLeads,
+  fetchPipelineStages,
+  fetchPriorityLeads,
+  fetchWorkspaceStats,
+  queueScoreLead,
+} from '@/lib/api';
 import { ImportModal } from '@/components/leads/ImportModal';
 import { LeadDetail } from '@/components/leads/LeadDetail';
 import { useLeadStore } from '@/stores/leadStore';
@@ -43,10 +50,16 @@ export default function Leads() {
   const [minScore, setMinScore] = useState('');
   const [maxScore, setMaxScore] = useState('');
   const [sortScoreDesc, setSortScoreDesc] = useState(false);
+  const [priorityView, setPriorityView] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [importOpen, setImportOpen] = useState(false);
 
   const stagesQ = useQuery({ queryKey: ['pipeline-stages'], queryFn: fetchPipelineStages });
+  const statsQ = useQuery({
+    queryKey: ['stats'],
+    queryFn: fetchWorkspaceStats,
+    staleTime: 60_000,
+  });
 
   const queryParams = useMemo(
     () => ({
@@ -61,8 +74,8 @@ export default function Leads() {
   );
 
   const leadsQ = useQuery({
-    queryKey: ['leads', queryParams],
-    queryFn: () => fetchLeads(queryParams),
+    queryKey: priorityView ? ['leads', 'priority', queryParams] : ['leads', queryParams],
+    queryFn: () => (priorityView ? fetchPriorityLeads(100) : fetchLeads(queryParams)),
   });
 
   const scoreMu = useMutation({
@@ -105,10 +118,20 @@ export default function Leads() {
     <div>
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold text-white">Leads</h1>
+          <h1 className="text-2xl font-semibold text-white">Opportunities</h1>
           <p className="mt-1 text-sm text-slate-400">
-            Import, filter, bulk score/archive. Worker required for scoring/SMS jobs.
+            Upload a list and Flaxnet will start conversations for you. Worker required for enrichment, scoring, and
+            SMS.
           </p>
+          {statsQ.data && (
+            <p className="mt-2 text-xs text-slate-500">
+              Workspace: {statsQ.data.totalLeads} opportunities · {Math.round(statsQ.data.pctContacted * 100)}%
+              contacted · {Math.round(statsQ.data.pctReplied * 100)}% replied
+              {statsQ.data.avgResponseTimeMinutes != null
+                ? ` · avg ${statsQ.data.avgResponseTimeMinutes.toFixed(0)} min to reply`
+                : ''}
+            </p>
+          )}
         </div>
         <button
           type="button"
@@ -145,7 +168,7 @@ export default function Leads() {
           </select>
         </label>
         <label className="text-xs text-slate-500">
-          Min score
+          Min motivation
           <input
             value={minScore}
             onChange={(e) => setMinScore(e.target.value)}
@@ -154,7 +177,7 @@ export default function Leads() {
           />
         </label>
         <label className="text-xs text-slate-500">
-          Max score
+          Max motivation
           <input
             value={maxScore}
             onChange={(e) => setMaxScore(e.target.value)}
@@ -164,7 +187,18 @@ export default function Leads() {
         </label>
         <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-400">
           <input type="checkbox" checked={sortScoreDesc} onChange={(e) => setSortScoreDesc(e.target.checked)} />
-          Sort by score ↓
+          Sort by motivation ↓
+        </label>
+        <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-400">
+          <input
+            type="checkbox"
+            checked={priorityView}
+            onChange={(e) => {
+              setPriorityView(e.target.checked);
+              if (e.target.checked) setSortScoreDesc(false);
+            }}
+          />
+          Priority (replied → score → activity)
         </label>
       </div>
 
@@ -189,7 +223,7 @@ export default function Leads() {
             }}
             className="rounded bg-slate-700 px-2 py-1 text-xs text-white hover:bg-slate-600 disabled:opacity-50"
           >
-            Archive leads
+            Archive selected
           </button>
           <button type="button" onClick={() => setSelected(new Set())} className="text-xs text-slate-500 underline">
             Clear
@@ -201,18 +235,26 @@ export default function Leads() {
       <div className="mt-6 overflow-x-auto rounded-lg border border-slate-800">
         {leadsQ.isLoading && <p className="p-4 text-slate-500">Loading…</p>}
         {leadsQ.isError && <p className="p-4 text-red-400">{(leadsQ.error as Error).message}</p>}
-        {leadsQ.data && (
-          <table className="w-full min-w-[800px] text-left text-sm">
+        {leadsQ.data && rows.length === 0 && (
+          <p className="mt-6 rounded-lg border border-slate-800 bg-slate-900/40 p-8 text-center text-sm text-slate-400">
+            No opportunities match your filters. Import a CSV or adjust filters — then enrichment and scoring will run
+            in the worker.
+          </p>
+        )}
+        {leadsQ.data && rows.length > 0 && (
+          <table className="w-full min-w-[880px] text-left text-sm">
             <thead className="border-b border-slate-800 bg-slate-900">
               <tr>
                 <th className="w-10 p-2">
                   <input type="checkbox" checked={allSelected} onChange={toggleAll} aria-label="Select all" />
                 </th>
-                <th className="p-3">Score</th>
+                <th className="p-3">Motivation</th>
                 <th className="p-3">Address</th>
                 <th className="p-3">Owner</th>
                 <th className="p-3">Phone</th>
                 <th className="p-3">Status</th>
+                <th className="p-3">Last contact</th>
+                <th className="p-3">Reply</th>
                 <th className="p-3 w-36">Actions</th>
               </tr>
             </thead>
@@ -247,6 +289,13 @@ export default function Leads() {
                   <td className="p-3 text-slate-300">{ownerName(row)}</td>
                   <td className="p-3 text-slate-400">{primaryPhone(row)}</td>
                   <td className="p-3 text-slate-400">{row.status}</td>
+                  <td className="p-3">
+                    {row.hasReplied ? (
+                      <span className="rounded bg-emerald-900/50 px-2 py-0.5 text-xs text-emerald-200">Replied</span>
+                    ) : (
+                      <span className="text-xs text-slate-600">—</span>
+                    )}
+                  </td>
                   <td className="p-3" onClick={(e) => e.stopPropagation()}>
                     <button
                       type="button"
@@ -254,7 +303,7 @@ export default function Leads() {
                       onClick={() => scoreMu.mutate(row.id)}
                       className="rounded bg-slate-700 px-2 py-1 text-xs text-white hover:bg-slate-600 disabled:opacity-50"
                     >
-                      Score lead
+                      Score
                     </button>
                   </td>
                 </tr>

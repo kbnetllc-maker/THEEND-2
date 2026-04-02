@@ -1,7 +1,8 @@
 import { runAutomations } from '../lib/automationEngine.js';
 import { prisma } from '../lib/prisma.js';
 
-const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const LEGACY_WAIT_MS = 3 * DAY_MS;
 
 function workspaceIdsForSweep(): string[] {
   const fromEnv = process.env.FOLLOW_UP_WORKSPACE_IDS?.split(',').map((s) => s.trim()).filter(Boolean);
@@ -10,9 +11,16 @@ function workspaceIdsForSweep(): string[] {
   return dev ? [dev] : [];
 }
 
+/** Wait after attempt N before queuing attempt N+1 (automation). */
+function waitMsAfterAttempt(attempt: number | null): number {
+  if (attempt === 1) return 2 * DAY_MS;
+  if (attempt === 2) return 4 * DAY_MS;
+  return LEGACY_WAIT_MS;
+}
+
 /**
- * Leads whose last SMS was outbound, older than 3 days, with no inbound after it.
- * NO_REPLY automation only runs if ≥1 prior automation SMS (handled inside engine).
+ * Per lead: last automation outbound SMS drives delay (2d after att1, 4d after att2).
+ * NO_REPLY automation still requires ≥1 prior automation SMS (engine). Stops after 3 attempts.
  */
 export async function processFollowUpSweep(): Promise<void> {
   const workspaceIds = workspaceIdsForSweep();
@@ -21,30 +29,41 @@ export async function processFollowUpSweep(): Promise<void> {
     return;
   }
 
-  const cutoff = new Date(Date.now() - THREE_DAYS_MS);
-
   for (const workspaceId of workspaceIds) {
-    const groups = await prisma.message.groupBy({
-      by: ['leadId'],
+    const autoOut = await prisma.message.findMany({
       where: {
         workspaceId,
         channel: 'SMS',
         direction: 'OUTBOUND',
+        automation: true,
         leadId: { not: null },
       },
-      _max: { createdAt: true },
+      select: { leadId: true, createdAt: true, attempt: true },
+      orderBy: { createdAt: 'desc' },
     });
 
-    for (const g of groups) {
-      const leadId = g.leadId;
-      const lastOutAt = g._max.createdAt;
-      if (!leadId || !lastOutAt || lastOutAt > cutoff) continue;
+    const latestAutoByLead = new Map<string, { createdAt: Date; attempt: number | null }>();
+    for (const m of autoOut) {
+      if (!m.leadId) continue;
+      if (!latestAutoByLead.has(m.leadId)) {
+        latestAutoByLead.set(m.leadId, { createdAt: m.createdAt, attempt: m.attempt ?? null });
+      }
+    }
+
+    const now = Date.now();
+
+    for (const [leadId, last] of latestAutoByLead) {
+      const att = last.attempt;
+      if (att != null && att >= 3) continue;
+
+      const waitMs = waitMsAfterAttempt(att);
+      if (last.createdAt.getTime() > now - waitMs) continue;
 
       const inboundAfter = await prisma.message.findFirst({
         where: {
           leadId,
           direction: 'INBOUND',
-          createdAt: { gt: lastOutAt },
+          createdAt: { gt: last.createdAt },
         },
       });
       if (inboundAfter) continue;

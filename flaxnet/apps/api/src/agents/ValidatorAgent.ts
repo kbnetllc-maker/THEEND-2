@@ -29,6 +29,16 @@ export type ScoringOutput = z.infer<typeof scoringOutputSchema>;
 export type SmsOutreach = z.infer<typeof outreachSmsSchema>;
 export type DealAnalyzerOutput = z.infer<typeof dealAnalyzerSchema>;
 
+/** When the model or validator fails — tier aligned to score band. */
+export function fallbackScoringOutput(reason: string): ScoringOutput {
+  return {
+    score: 40,
+    tier: 'WARM',
+    reasons: [reason],
+    urgencySignals: ['scoring_fallback'],
+  };
+}
+
 export class ValidatorAgent {
   /** score 0–100, tier matches band, reasons 1–5 */
   validateScore(output: unknown): ScoringOutput {

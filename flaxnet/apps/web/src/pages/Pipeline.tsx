@@ -40,6 +40,7 @@ function LeadCard({ lead }: { lead: LeadListRow }) {
       </p>
       <span
         className={`mt-1 inline-block rounded px-1.5 py-0.5 text-[10px] font-medium ${scoreBadgeClass(lead.aiScore)}`}
+        title="Seller motivation"
       >
         {lead.aiScore ?? '—'}
       </span>

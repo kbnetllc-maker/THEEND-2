@@ -9,11 +9,13 @@ datasource db {
 
 // ─── WORKSPACE ────────────────────────────────────────────────
 model Workspace {
-  id          String   @id @default(cuid())
-  name        String
-  clerkOrgId  String   @unique
-  plan        Plan     @default(STARTER)
-  createdAt   DateTime @default(now())
+  id                   String   @id @default(cuid())
+  name                 String
+  clerkOrgId           String   @unique
+  plan                 Plan     @default(STARTER)
+  stripeCustomerId     String?
+  stripeSubscriptionId String?
+  createdAt            DateTime @default(now())
 
   members     WorkspaceMember[]
   leads       Lead[]
@@ -72,6 +74,11 @@ model Lead {
   isDuplicate     Boolean     @default(false)
   isArchived      Boolean     @default(false)
 
+  /** Last persisted scoring agent payload (admin / debug). */
+  lastScoringAgentOutput   Json?
+  /** Last AI-generated outreach body + meta (admin / debug). */
+  lastOutreachAgentOutput  Json?
+
   createdAt       DateTime    @default(now())
   updatedAt       DateTime    @updatedAt
 
@@ -87,6 +94,7 @@ model Lead {
   @@index([workspaceId, stageId])
   @@index([workspaceId, status, createdAt])
   @@index([workspaceId, aiScore])
+  @@index([workspaceId, createdAt])
   @@index([address, zip])
 }
 
@@ -186,6 +194,10 @@ model Message {
   /** True when sent by automation engine (counts toward max 3 auto SMS) */
   automation  Boolean       @default(false)
   metadata    Json?
+  /** True once an inbound SMS arrived after this outbound (Twilio webhook). */
+  replied     Boolean       @default(false)
+  /** Minutes from this outbound send to first qualifying inbound (set with `replied`). */
+  responseTimeMinutes Int?
 
   createdAt   DateTime      @default(now())
 

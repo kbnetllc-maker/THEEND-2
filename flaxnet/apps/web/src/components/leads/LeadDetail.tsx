@@ -33,29 +33,31 @@ export function LeadDetail() {
     queryKey: ['lead', selectedLeadId],
     queryFn: () => fetchLead(selectedLeadId!),
     enabled: open,
+    refetchInterval: open ? 15_000 : false,
   });
 
   const messagesQ = useQuery({
     queryKey: ['messages', selectedLeadId],
     queryFn: () => fetchMessages(selectedLeadId!),
     enabled: open,
+    refetchInterval: open ? 10_000 : false,
   });
 
   const scoreMu = useMutation({
     mutationFn: (id: string) => queueScoreLead(id),
-    onSuccess: () => {
+    onSuccess: (_d, leadId) => {
       void qc.invalidateQueries({ queryKey: ['leads'] });
-      void qc.invalidateQueries({ queryKey: ['lead', selectedLeadId] });
+      void qc.invalidateQueries({ queryKey: ['lead', leadId] });
     },
   });
 
   const smsMu = useMutation({
     mutationFn: queueSendSms,
-    onSuccess: () => {
+    onSuccess: (_d, vars) => {
       setSmsDraft('');
-      void qc.invalidateQueries({ queryKey: ['messages', selectedLeadId] });
+      void qc.invalidateQueries({ queryKey: ['messages', vars.leadId] });
       void qc.invalidateQueries({ queryKey: ['leads'] });
-      void qc.invalidateQueries({ queryKey: ['lead', selectedLeadId] });
+      void qc.invalidateQueries({ queryKey: ['lead', vars.leadId] });
     },
   });
 
@@ -81,7 +83,7 @@ export function LeadDetail() {
         }`}
       >
         <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
-          <h2 className="text-lg font-semibold text-white">Lead</h2>
+          <h2 className="text-lg font-semibold text-white">Opportunity</h2>
           <button
             type="button"
             onClick={() => setSelectedLeadId(null)}
@@ -106,14 +108,23 @@ export function LeadDetail() {
                   {lead.address}, {lead.city}, {lead.state} {lead.zip}
                 </p>
                 <p className="mt-1 text-sm text-slate-400">Status: {lead.status}</p>
+                {lead.conversationStatus ? (
+                  <p className="mt-2 text-sm text-slate-300">
+                    <span className="text-slate-500">Conversation: </span>
+                    {lead.conversationStatus}
+                  </p>
+                ) : null}
                 <p className="mt-2 flex items-center gap-2 text-sm">
-                  <span className="text-slate-400">Score</span>
+                  <span className="text-slate-400">Seller motivation</span>
                   <span
                     className={`inline-flex rounded px-2 py-0.5 text-xs font-medium ${scoreBadgeClass(lead.aiScore)}`}
                   >
                     {lead.aiScore ?? '—'}
                   </span>
                 </p>
+                {lead.aiScoreReason ? (
+                  <p className="mt-2 text-xs leading-relaxed text-slate-400">{lead.aiScoreReason}</p>
+                ) : null}
               </section>
 
               <section className="mb-6">
@@ -167,6 +178,16 @@ export function LeadDetail() {
                           <p className="whitespace-pre-wrap">{m.body}</p>
                           <p className="mt-1 text-[10px] opacity-70">
                             {new Date(m.createdAt).toLocaleString()}
+                            {outbound && m.channel === 'SMS' && typeof m.attempt === 'number'
+                              ? ` · att ${m.attempt}`
+                              : ''}
+                            {outbound && m.automation ? ' · auto' : ''}
+                            {outbound && m.replied ? ' · replied' : ''}
+                            {outbound &&
+                            m.replied &&
+                            typeof m.responseTimeMinutes === 'number'
+                              ? ` · ${m.responseTimeMinutes}m to reply`
+                              : ''}
                           </p>
                         </div>
                       </div>
@@ -177,11 +198,11 @@ export function LeadDetail() {
 
               <section>
                 <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  Send SMS
+                  Start conversation
                 </h3>
                 {!primary?.phone?.trim() && (
                   <p className="mb-2 text-sm text-amber-400/90">
-                    Add a phone number on the contact to send SMS.
+                    Add a valid US phone on the contact to text.
                   </p>
                 )}
                 <textarea
@@ -211,10 +232,10 @@ export function LeadDetail() {
                   }}
                   className="mt-2 rounded-md bg-emerald-700 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-600 disabled:opacity-50"
                 >
-                  {smsMu.isPending ? 'Sending…' : 'Send'}
+                  {smsMu.isPending ? 'Sending…' : 'Send message'}
                 </button>
                 <p className="mt-2 text-xs text-slate-500">
-                  Queues outbound SMS on the worker (Twilio). Thread updates after send.
+                  Queues outbound SMS (Twilio). The thread refreshes on a short poll after send.
                 </p>
               </section>
             </>
